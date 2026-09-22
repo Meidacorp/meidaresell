@@ -199,22 +199,22 @@ function suiviEnvoi(type) {
     });
   }
   const body = d.toString();
-  // sendBeacon : le seul envoi que le navigateur garantit quand l'onglet se ferme.
+  // Apps Script répond par une redirection vers un autre domaine Google.
+  // sendBeacon et keepalive ne savent pas la suivre : ils échouent en 400.
+  // On envoie donc comme le formulaire, qui lui fonctionne depuis toujours.
   try {
-    if (type !== "visite" && navigator.sendBeacon) {
-      const blob = new Blob([body], { type: "application/x-www-form-urlencoded" });
-      if (navigator.sendBeacon(SHEET_URL, blob)) return;
-    }
-  } catch (e) {}
-  try {
-    fetch(SHEET_URL, { method: "POST", mode: "no-cors", keepalive: true,
+    fetch(SHEET_URL, { method: "POST", mode: "no-cors",
       headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }).catch(() => {});
   } catch (e) {}
 }
 
-// On peut renvoyer plusieurs fois : le script Google met à jour la même ligne
-// (repérée par le sid). On n'envoie que si quelque chose a changé.
+// On renvoie au fil de la visite, pas seulement à la fermeture : un envoi au
+// moment où l'onglet se ferme n'arrive pas toujours. Le script Google met à
+// jour la même ligne (repérée par le sid), donc renvoyer ne crée pas de doublon.
+// On n'envoie que si quelque chose a changé depuis la dernière fois.
 let suiviDernier = "";
+let suiviMinuteur = null;
+
 function suiviCloture() {
   const sig = [SUIVI.vsl, SUIVI.formOuvert, SUIVI.etapeMax, SUIVI.statut,
                JSON.stringify(SUIVI.reponses)].join("|");
@@ -223,8 +223,15 @@ function suiviCloture() {
   suiviEnvoi("parcours");
 }
 
+// groupe les changements rapprochés en un seul envoi
+function suiviPlanifie(delai) {
+  clearTimeout(suiviMinuteur);
+  suiviMinuteur = setTimeout(suiviCloture, delai === undefined ? 1200 : delai);
+}
+
 if (typeof window !== "undefined") {
   suiviEnvoi("visite");
+  setInterval(suiviCloture, 15000);          // filet : toutes les 15 s
   window.addEventListener("pagehide", suiviCloture);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") suiviCloture();
@@ -290,7 +297,7 @@ const C = {
   offres: [
     {
       nom: "Skool",
-      pitch: "Le Plugroom complet : formations vidéo, lives et communauté.",
+      pitch: "La Plugroom complète : formations vidéo, lives et communauté.",
       objectif: "3 000 à 5 000 € de CA / mois",
       acces: "600 €",
       duree: "Accès à vie",
@@ -326,7 +333,7 @@ const C = {
     "Fournisseur luxe",
     "Prix d'achat réels",
     "Méthodes de revente testées",
-    "Plugroom mis à jour",
+    "Plugroom mise à jour",
   ],
 
   // ── LE CALCUL ──
@@ -434,6 +441,7 @@ const C = {
 // ══════════════════════════════════════════════════════════════
 const ouvrirForm = () => {
   SUIVI.formOuvert = true;
+  suiviPlanifie(500);
   window.dispatchEvent(new Event("meida:open"));
 };
 
@@ -1190,9 +1198,10 @@ function Popup() {
       const q = ETAPES[step];
       SUIVI.questionMax = q ? (q.video ? "Vidéo de présentation" : (q.q || q.k)) : "Coordonnées";
     }
+    suiviPlanifie();
   }, [open, step]);
 
-  useEffect(() => { SUIVI.reponses = rep; }, [rep]);
+  useEffect(() => { SUIVI.reponses = rep; suiviPlanifie(); }, [rep]);
 
   if (!open) return null;
 
